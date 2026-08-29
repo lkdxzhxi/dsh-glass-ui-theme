@@ -1,6 +1,6 @@
 {
   "name": "dsh-glass-ui-theme",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Liquid Glass UI theme for DeepSeek Harness web: frosted-glass surfaces with edge refraction, adjustable opacity/blur/tint, custom fonts, background images & live video wallpapers with carousel, custom CSS and soft animations. DSH Web 液态玻璃 UI 主题：磨砂玻璃+边缘折射、可调透明度/模糊/色调、自定义字体、背景图与动态壁纸（多图轮播）、自定义 CSS、柔和动画。",
   "type": "module",
   "main": "lib/index.js",
