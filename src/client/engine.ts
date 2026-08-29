@@ -1,0 +1,391 @@
+/**
+ * The glass engine: applies a GlassConfig to the live page.
+ *
+ * Values are written as CSS variables on :root plus a few body attributes /
+ * classes; the static glass.css consumes them. Everything created here is
+ * tracked so the plugin fiber can tear it down (dispose).
+ */
+import type { GlassConfig } from './config.ts'
+
+const BG_ID = 'dsh-glass-bg'
+const FONT_FACE_ID = 'dsh-glass-fontface'
+const CUSTOM_CSS_ID = 'dsh-glass-custom'
+const GLASS_FILTER_ID = 'dsh-glass-filter-svg'
+
+/** The custom font family name used when a font file is uploaded. */
+export const CUSTOM_FONT_FAMILY = 'GlassCustomFont'
+
+const SURFACE_LIGHT = '255, 255, 255'
+const SURFACE_DARK = '16, 16, 24'
+
+/**
+ * A glass-matched accent: hue-shift the user's tint toward a calm teal/cyan
+ * so sliders/toggles stop using the stock bright blue and instead echo the
+ * glass's color temperature. Returns an opaque hex for reliable contrast.
+ */
+function glassAccent(tint: string): string {
+  const match = /^#?([0-9a-fA-F]{6})/.exec(tint.trim())
+  if (match === null) return '#4fb8b8'
+  const hex = match[1]
+  const r = parseInt(hex.slice(0, 2), 16)
+  const g = parseInt(hex.slice(2, 4), 16)
+  const b = parseInt(hex.slice(4, 6), 16)
+  // Move toward a teal/cyan balance (weight green+blue, soften red).
+  const nr = Math.round(r * 0.55)
+  const ng = Math.round(r * 0.15 + g * 0.55 + b * 0.30)
+  const nb = Math.round(r * 0.05 + g * 0.30 + b * 0.65)
+  return `#${[nr, ng, nb].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')}`
+}
+
+export class GlassEngine {
+  private disposers: Array<() => void> = []
+  private applied = false
+  private carouselTimer: number | undefined
+  /** double-buffered wallpaper images (alternate as active) */
+  private imgA: HTMLImageElement | null = null
+  private imgB: HTMLImageElement | null = null
+  private active: 'A' | 'B' = 'A'
+  private imageSeq = 0
+  private currentVideo: HTMLVideoElement | null = null
+  private videoSeq = 0
+
+  /** Mount the background host element (idempotent). */
+  private ensureBgHost(): HTMLElement {
+    let host = document.getElementById(BG_ID)
+    if (host !== null) return host as HTMLElement
+    host = document.createElement('div')
+    host.id = BG_ID
+    document.body.appendChild(host)
+    const remove = (): void => {
+      host?.remove()
+    }
+    this.disposers.push(remove)
+    return host
+  }
+
+  /** Apply a config to the live page. Safe to call repeatedly. */
+  apply(config: GlassConfig): void {
+    const root = document.documentElement
+    const cssFont = config.font === '' ? 'inherit' : config.font
+    root.style.setProperty('--glass-opacity', String(config.opacity))
+    root.style.setProperty('--glass-blur', `${config.blur}px`)
+    root.style.setProperty('--glass-font', cssFont)
+    root.style.setProperty('--glass-font-url', config.fontUrl === '' ? 'none' : `url("${config.fontUrl}")`)
+    root.style.setProperty('--glass-bg-type', config.bgType)
+    root.style.setProperty('--glass-bg-image', config.bgImage === '' ? 'none' : `url("${config.bgImage}")`)
+    root.style.setProperty('--glass-bg-video', config.bgVideo === '' ? 'none' : `url("${config.bgVideo}")`)
+    root.style.setProperty('--glass-bg-mask', String(config.bgMask))
+    root.style.setProperty('--glass-bg-fit', config.bgFit)
+    root.style.setProperty('--glass-anim-level', config.animLevel)
+    root.style.setProperty('--glass-surface-light', `rgba(${SURFACE_LIGHT}, ${config.opacity})`)
+    root.style.setProperty('--glass-surface-dark', `rgba(${SURFACE_DARK}, ${config.opacity})`)
+    // frosted glass knobs (consumed by glass.css rules)
+    root.style.setProperty('--glass-frosted', config.frosted ? '1' : '0')
+    root.style.setProperty('--glass-frost-blur', `${config.frostBlur}px`)
+    root.style.setProperty('--glass-refraction', String(config.refraction))
+    root.style.setProperty('--glass-tint', config.tint)
+    root.style.setProperty('--glass-tint-opacity', String(config.tintOpacity))
+    root.style.setProperty('--glass-edge-refraction-scale', String(config.edgeRefractionScale))
+    root.style.setProperty('--glass-brightness', String(config.brightness))
+    root.style.setProperty('--glass-glass-brightness', String(config.glassBrightness))
+    root.style.setProperty('--glass-bg-blur', `${config.bgBlur}px`)
+    // accent for sliders/toggles — derive a glass-matched hue from the tint
+    root.style.setProperty('--glass-accent', glassAccent(config.tint))
+
+    const body = document.body
+    body.classList.add('dsh-glass-on')
+    body.classList.toggle('dsh-glass-frosted-on', config.frosted)
+    body.dataset.glassFit = config.bgFit
+    body.classList.toggle('dsh-glass-anim-soft', config.animLevel === 'soft')
+    body.classList.toggle('dsh-glass-anim-strong', config.animLevel === 'strong')
+    body.classList.toggle('dsh-glass-anim-none', config.animLevel === 'none')
+
+    this.updateFontFace(config)
+    this.updateBackground(config)
+    this.updateCustomCss(config.customCss)
+    this.ensureGlassFilter(config)
+    // after the first apply, fade the background layer in (see glass.css)
+    body.classList.add('dsh-glass-ready')
+    this.applied = true
+  }
+
+  private updateFontFace(config: GlassConfig): void {
+    const existing = document.getElementById(FONT_FACE_ID) as HTMLStyleElement | null
+    if (config.fontUrl === '' || !config.font.includes(CUSTOM_FONT_FAMILY)) {
+      existing?.remove()
+      return
+    }
+    const css =
+      `@font-face{font-family:${CUSTOM_FONT_FAMILY};src:url("${config.fontUrl}") format("woff2"),` +
+      `url("${config.fontUrl}") format("woff"),url("${config.fontUrl}") format("truetype");font-display:swap}`
+    if (existing !== null) {
+      // re-uploading a font must repoint the live @font-face, not skip it
+      if (existing.textContent !== css) existing.textContent = css
+      return
+    }
+    const style = document.createElement('style')
+    style.id = FONT_FACE_ID
+    style.textContent = css
+    document.head.appendChild(style)
+    this.disposers.push(() => style.remove())
+  }
+
+  /** Inject the SVG feDisplacementMap filter once (idempotent). */
+  private ensureGlassFilter(config: GlassConfig): void {
+    if (document.getElementById(GLASS_FILTER_ID)) return
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.id = GLASS_FILTER_ID
+    svg.setAttribute('width', '0')
+    svg.setAttribute('height', '0')
+    svg.style.cssText = 'position:fixed;pointer-events:none;visibility:hidden;top:0;left:0;overflow:hidden'
+    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter')
+    filter.id = 'dsh-glass-edge-refraction'
+    filter.setAttribute('x', '-10%')
+    filter.setAttribute('y', '-10%')
+    filter.setAttribute('width', '120%')
+    filter.setAttribute('height', '120%')
+    filter.setAttribute('filterUnits', 'objectBoundingBox')
+    filter.setAttribute('color-interpolation-filters', 'sRGB')
+    const disp = document.createElementNS('http://www.w3.org/2000/svg', 'feDisplacementMap')
+    disp.setAttribute('scale', String(config.edgeRefractionScale))
+    filter.appendChild(disp)
+    svg.appendChild(filter)
+    document.body.appendChild(svg)
+    this.disposers.push(() => svg.remove())
+  }
+
+  private updateCustomCss(css: string): void {
+    const existing = document.getElementById(CUSTOM_CSS_ID)
+    if (css === '') {
+      existing?.remove()
+      return
+    }
+    if (existing === null) {
+      const style = document.createElement('style')
+      style.id = CUSTOM_CSS_ID
+      document.head.appendChild(style)
+      this.disposers.push(() => style.remove())
+    }
+    const el = document.getElementById(CUSTOM_CSS_ID) as HTMLStyleElement | null
+    if (el !== null && el.textContent !== css) el.textContent = css
+  }
+
+  private stopCarousel(): void {
+    if (this.carouselTimer !== undefined) {
+      window.clearInterval(this.carouselTimer)
+      this.carouselTimer = undefined
+    }
+  }
+
+  /**
+   * Crossfade to a new wallpaper with double buffering: the new image is
+   * preloaded first and only then faded in over the still-visible old one.
+   * The background never goes blank, so there is no black flash while
+   * switching/uploading wallpapers in the settings panel.
+   */
+  private imageEl(key: 'A' | 'B'): HTMLImageElement {
+    const host = this.ensureBgHost()
+    let el = key === 'A' ? this.imgA : this.imgB
+    if (el === null || !host.contains(el)) {
+      el = document.createElement('img')
+      el.alt = ''
+      el.style.opacity = '0'
+      host.appendChild(el)
+      if (key === 'A') this.imgA = el
+      else this.imgB = el
+    }
+    return el
+  }
+
+  /**
+   * Canonical absolute form of a wallpaper URL. Element `.src` getters return
+   * absolute URLs while config values are relative (`/glass-ui/media/…`), so
+   * raw string comparison can never dedupe — every apply() would re-probe the
+   * wallpaper. Resolve both sides through here.
+   */
+  private absUrl(url: string): string {
+    return new URL(url, window.location.href).href
+  }
+
+  private renderImage(url: string): void {
+    const host = this.ensureBgHost()
+    const abs = this.absUrl(url)
+    const activeEl = this.imageEl(this.active)
+    if (activeEl.src === abs) return
+    const seq = ++this.imageSeq
+    const probe = new Image()
+    probe.onload = () => {
+      if (seq !== this.imageSeq) return // a newer request superseded this one
+      if (!host.isConnected) return // engine disposed meanwhile
+      const nextKey = this.active === 'A' ? 'B' : 'A'
+      const nextEl = this.imageEl(nextKey)
+      nextEl.src = abs
+      nextEl.style.opacity = '0'
+      // flush style, then crossfade
+      void nextEl.offsetWidth
+      nextEl.style.transition = 'opacity 0.45s ease'
+      nextEl.style.opacity = '1'
+      activeEl.style.transition = 'opacity 0.45s ease'
+      activeEl.style.opacity = '0'
+      this.active = nextKey
+    }
+    probe.onerror = () => {
+      // keep the current image; never blank the background
+    }
+    probe.src = abs
+  }
+
+  /**
+   * Video wallpaper with readiness gating: a bare <video> paints BLACK while
+   * its source loads or switches, which is exactly the flash users saw. So a
+   * hidden probe video preloads the new URL first; only when the first frame
+   * is available (loadeddata) does it fade in over the still-visible old
+   * video, which is then released. The gradient backdrop stays visible the
+   * whole time, so the background never goes black — on upload, switch,
+   * carousel, or page refresh.
+   */
+  private renderVideo(url: string): void {
+    const host = this.ensureBgHost()
+    const abs = this.absUrl(url)
+    if (this.currentVideo !== null && this.currentVideo.src === abs) return
+    const seq = ++this.videoSeq
+
+    const probe = document.createElement('video')
+    probe.muted = true
+    probe.loop = true
+    probe.playsInline = true
+    probe.preload = 'auto'
+    probe.style.opacity = '0'
+
+    const onReady = (): void => {
+      if (seq !== this.videoSeq || !host.isConnected) {
+        probe.remove()
+        return
+      }
+      probe.removeEventListener('loadeddata', onReady)
+      probe.removeEventListener('error', onError)
+      const old = this.currentVideo
+      this.currentVideo = probe
+      void probe.offsetWidth // flush style
+      probe.style.transition = 'opacity 0.5s ease'
+      probe.style.opacity = '1'
+      void probe.play().catch(() => undefined)
+      if (old !== null && old !== probe) {
+        old.style.transition = 'opacity 0.5s ease'
+        old.style.opacity = '0'
+        window.setTimeout(() => {
+          if (old !== null && old !== this.currentVideo) {
+            old.pause()
+            old.removeAttribute('src')
+            old.load() // release the big media buffer
+            old.remove()
+          }
+        }, 560)
+      }
+    }
+    const onError = (): void => {
+      if (seq !== this.videoSeq) return
+      probe.removeEventListener('loadeddata', onReady)
+      probe.remove()
+    }
+
+    probe.addEventListener('loadeddata', onReady)
+    probe.addEventListener('error', onError)
+    probe.src = abs
+    probe.load()
+    host.appendChild(probe)
+  }
+
+  private updateBackground(config: GlassConfig): void {
+    const host = this.ensureBgHost()
+    this.stopCarousel()
+    if (config.bgType === 'image') {
+      this.currentVideo?.remove()
+      this.currentVideo = null
+      const slides = config.bgImages.length > 0
+        ? config.bgImages
+        : config.bgImage !== ''
+          ? [config.bgImage]
+          : []
+      if (slides.length === 0) {
+        // no slides: drop the images (the gradient backdrop remains)
+        this.imgA?.remove()
+        this.imgA = null
+        this.imgB?.remove()
+        this.imgB = null
+        return
+      }
+      if (config.bgRotate && slides.length > 1) {
+        let index = Math.max(0, slides.indexOf(config.bgImage))
+        const first = slides[index]
+        if (first !== undefined) this.renderImage(first)
+        this.carouselTimer = window.setInterval(() => {
+          index = (index + 1) % slides.length
+          const url = slides[index]
+          if (url !== undefined) this.renderImage(url)
+        }, config.bgRotateInterval * 1000)
+      } else {
+        this.renderImage(config.bgImage)
+      }
+    } else if (config.bgType === 'video') {
+      this.imgA?.remove()
+      this.imgA = null
+      this.imgB?.remove()
+      this.imgB = null
+      if (config.bgVideo !== '') {
+        this.renderVideo(config.bgVideo)
+      } else {
+        // wallpaper removed: drop the video, gradient backdrop remains
+        this.currentVideo?.remove()
+        this.currentVideo = null
+      }
+    } else {
+      this.imgA?.remove()
+      this.imgA = null
+      this.imgB?.remove()
+      this.imgB = null
+      this.currentVideo?.remove()
+      this.currentVideo = null
+    }
+  }
+
+  /** Remove everything the engine created (plugin unload / HMR). */
+  dispose(): void {
+    this.imageSeq += 1 // invalidate in-flight preloads
+    this.videoSeq += 1 // invalidate in-flight video probes
+    this.stopCarousel()
+    for (const dispose of this.disposers.splice(0)) dispose()
+    const bg = document.getElementById(BG_ID)
+    bg?.remove()
+    document.getElementById(FONT_FACE_ID)?.remove()
+    document.getElementById(CUSTOM_CSS_ID)?.remove()
+    document.getElementById(GLASS_FILTER_ID)?.remove()
+    // drop the :root variables too, so an unloaded plugin leaves no trace
+    const root = document.documentElement
+    for (const name of [
+      '--glass-opacity', '--glass-blur', '--glass-font', '--glass-font-url',
+      '--glass-bg-type', '--glass-bg-image', '--glass-bg-video', '--glass-bg-mask',
+      '--glass-bg-fit', '--glass-anim-level',
+      '--glass-surface-light', '--glass-surface-dark',
+      '--glass-frosted', '--glass-frost-blur', '--glass-refraction',
+      '--glass-tint', '--glass-tint-opacity', '--glass-edge-refraction-scale',
+      '--glass-brightness', '--glass-glass-brightness', '--glass-bg-blur',
+    ]) {
+      root.style.removeProperty(name)
+    }
+    const body = document.body
+    body.classList.remove(
+      'dsh-glass-on',
+      'dsh-glass-frosted-on',
+      'dsh-glass-anim-soft',
+      'dsh-glass-anim-strong',
+      'dsh-glass-anim-none',
+      'dsh-glass-ready',
+    )
+    delete body.dataset.glassFit
+    this.imgA = null
+    this.imgB = null
+    this.currentVideo = null
+    this.applied = false
+  }
+}

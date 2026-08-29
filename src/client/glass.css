@@ -1,0 +1,1249 @@
+/**
+ * dsh-glass-ui — the liquid glass look.
+ *
+ * Technique:
+ *  1. Fixed background layer blurs itself with `filter: blur()`, sits at
+ *     z-index -1.  `inset: -48px` gives the blur room so edges never show
+ *     transparent bleed.
+ *  2. Surface tokens are overridden to translucent glass values via
+ *     ctx.theme.overrideTokens — values are var() references so the opacity
+ *     slider only touches :root variables.
+ *  3. Frosted-glass elements (composer card, view tabs, sidebar buttons,
+ *     message bubbles, queue dock, dialogs, dropdowns) use a `::before`
+ *     pseudo-element that carries `backdrop-filter`.  The containing-block
+ *     side-effect of backdrop-filter only applies to the pseudo's own
+ *     (non-existent) descendants, so fixed-position popups keep their
+ *     viewport anchors.
+ *  4. An inline SVG feDisplacementMap (injected by GlassEngine) drives edge
+ *     refraction: strongest at the element border where the backdrop
+ *     transitions, weakest at the center.
+ *
+ * All rules are namespaced under body.dsh-glass-on (set by JS) so the plugin
+ * can be turned off cleanly.
+ */
+
+/* ---- root knobs (JS writes these; defaults shown) ---- */
+:root {
+  --glass-opacity: 0.45;        /* surface solidity, 0.1..0.95 */
+  --glass-blur: 28px;           /* background self-blur radius */
+  --glass-font: "";             /* font family applied to the UI */
+  --glass-font-url: "";         /* uploaded @font-face source */
+  --glass-bg-type: none;        /* none | image | video */
+  --glass-bg-image: none;       /* url(...) */
+  --glass-bg-video: none;       /* url(...) */
+  --glass-bg-mask: 0;           /* dark overlay over the wallpaper, 0..0.7 */
+  --glass-bg-fit: cover;        /* cover | contain | original */
+  --glass-anim-level: soft;     /* none | soft | strong */
+  --glass-frosted: 1;           /* 0 = off, 1 = on */
+  --glass-frost-blur: 24px;     /* backdrop-filter blur on cards */
+  --glass-refraction: 0.4;      /* lens edge luminosity, 0..1 */
+  --glass-tint: #ffffff;        /* glass tint color */
+  --glass-tint-opacity: 0.35;   /* tint opacity, 0..1 */
+  --glass-edge-refraction-scale: 80; /* SVG feDisplacementMap scale */
+  --glass-brightness: 1;        /* wallpaper brightness filter */
+  --glass-glass-brightness: 1;  /* tint lightness scale */
+  --glass-bg-blur: 5px;         /* separate background layer blur */
+  --glass-surface-light: rgba(255, 255, 255, 0.45);
+  --glass-surface-dark: rgba(16, 16, 24, 0.45);
+  --glass-accent: #4fb8b8;      /* accent for sliders/toggles, glass-matched */
+}
+
+/* ---- custom font ---- */
+body.dsh-glass-on,
+body.dsh-glass-on button,
+body.dsh-glass-on input,
+body.dsh-glass-on select,
+body.dsh-glass-on textarea {
+  font-family: var(--glass-font);
+}
+
+/* ---- background layer ---- */
+#dsh-glass-bg {
+  position: fixed;
+  inset: -48px;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  /* soft default gradient so the glass reads even without a wallpaper — unified teal palette */
+  background:
+    radial-gradient(1200px 800px at 82% -10%, rgba(79, 184, 184, 0.22), transparent 60%),
+    radial-gradient(1000px 700px at 8% 112%, rgba(0, 210, 180, 0.16), transparent 55%),
+    linear-gradient(165deg, rgba(79, 184, 184, 0.08), transparent 45%);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+body.dsh-glass-ready #dsh-glass-bg { opacity: 1; }
+
+#dsh-glass-bg img,
+#dsh-glass-bg video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: var(--glass-bg-fit, cover);
+  filter:
+    blur(calc(var(--glass-blur) * 0.55))
+    saturate(1.12)
+    brightness(var(--glass-brightness, 1));
+  transform: scale(1.06);
+  transition: filter 0.7s ease, opacity 0.7s ease;
+}
+
+body[data-glass-fit="contain"] #dsh-glass-bg img,
+body[data-glass-fit="contain"] #dsh-glass-bg video { object-fit: contain; }
+
+body[data-glass-fit="original"] #dsh-glass-bg img,
+body[data-glass-fit="original"] #dsh-glass-bg video {
+  object-fit: none;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+/* readability overlay */
+#dsh-glass-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, var(--glass-bg-mask));
+  transition: opacity 0.7s ease;
+}
+body[data-ds-dark-theme] #dsh-glass-bg::after {
+  background: rgba(0, 0, 0, var(--glass-bg-mask));
+}
+
+/* lift #root above the background layer */
+#root { position: relative; z-index: 1; }
+
+/* ---- frosted scrollbars ---- */
+body.dsh-glass-on {
+  --dsh-scrollbar-thumb: rgba(127, 127, 127, 0.38);
+  --dsh-scrollbar-thumb-hover: rgba(127, 127, 127, 0.55);
+}
+
+/* ==========================================================================
+   FROSTED GLASS — applied via ::before pseudo so backdrop-filter never
+   re-anchors fixed descendants.  Only active when --glass-frosted = 1.
+   ========================================================================== */
+
+/* --- helper: frosted ::before on any element --- */
+body.dsh-glass-on [data-frost] {
+  position: relative;
+  isolation: isolate;
+}
+body.dsh-glass-on [data-frost]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  pointer-events: none;
+  -webkit-backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  background: color-mix(
+    in srgb,
+    var(--glass-tint, #ffffff)
+      calc(var(--glass-tint-opacity, 0.35) * 100%),
+    transparent
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.15),
+    inset 0 0 14px rgba(255, 255, 255, 0.06),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.10),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.10),
+    0 0 16px rgba(255, 255, 255, 0.08);
+}
+
+body[data-ds-dark-theme].dsh-glass-on [data-frost]::before {
+  background: color-mix(
+    in srgb,
+    var(--glass-tint, #ffffff)
+      calc(var(--glass-tint-opacity, 0.35) * 60%),
+    transparent
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 0 14px rgba(255, 255, 255, 0.04),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.07),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.07),
+    0 0 20px rgba(255, 255, 255, 0.06);
+}
+
+/* --- composer card --- */
+body.dsh-glass-on [data-composer-card] {
+  isolation: isolate;
+}
+body.dsh-glass-on [data-composer-card]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+  -webkit-backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  background: color-mix(
+    in srgb,
+    var(--glass-tint, #ffffff)
+      calc(var(--glass-tint-opacity, 0.35) * 80%),
+    transparent
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.20),
+    inset 0 0 18px rgba(255, 255, 255, 0.08),
+    inset 0 0 36px rgba(255, 255, 255, 0.04),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.16),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.16),
+    0 0 24px rgba(255, 255, 255, 0.10);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card]::before {
+  background: color-mix(
+    in srgb,
+    var(--glass-tint, #ffffff)
+      calc(var(--glass-tint-opacity, 0.35) * 50%),
+    transparent
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 0 18px rgba(255, 255, 255, 0.06),
+    inset 0 0 40px rgba(255, 255, 255, 0.03),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.10),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.10),
+    0 0 28px rgba(255, 255, 255, 0.08);
+}
+
+/* --- send / stop button (primary action) --- */
+body.dsh-glass-on [data-composer-card] button[class*="_primary"] {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--glass-tint, #ffffff) 22%, transparent),
+    color-mix(in srgb, var(--glass-tint, #ffffff) 8%, transparent)) !important;
+  -webkit-backdrop-filter: blur(12px) url(#dsh-glass-edge-refraction);
+  backdrop-filter: blur(12px) url(#dsh-glass-edge-refraction);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.40),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.15),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.12),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.12) !important;
+}
+body.dsh-glass-on [data-composer-card] button[class*="_primary"]:hover:not(:disabled) {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--glass-tint, #ffffff) 32%, transparent),
+    color-mix(in srgb, var(--glass-tint, #ffffff) 12%, transparent)) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[class*="_primary"] {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--glass-tint, #ffffff) 36%, transparent),
+    color-mix(in srgb, var(--glass-tint, #ffffff) 14%, transparent)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 -2px 8px rgba(0, 0, 0, 0.30),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.08),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.08) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[class*="_primary"]:hover:not(:disabled) {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--glass-tint, #ffffff) 48%, transparent),
+    color-mix(in srgb, var(--glass-tint, #ffffff) 20%, transparent)) !important;
+}
+
+/* --- command button (+) in composer --- */
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"],
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i] {
+  position: relative;
+  isolation: isolate;
+  z-index: 1;
+  background: transparent !important;
+}
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"]::before,
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(14px) url(#dsh-glass-edge-refraction);
+  backdrop-filter: blur(14px) url(#dsh-glass-edge-refraction);
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 30%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.50),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.26),
+    inset 0 0 10px rgba(255, 255, 255, 0.10),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.18),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.10);
+}
+/* the "+" glyph: force a dark, crisp stroke so it reads at rest */
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"] svg,
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"] path,
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i] svg,
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i] path {
+  stroke: rgba(20, 21, 30, 0.92) !important;
+  fill: rgba(20, 21, 30, 0.92) !important;
+  color: rgba(20, 21, 30, 0.92) !important;
+  opacity: 1 !important;
+  filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.45));
+}
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"]:hover svg,
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"]:hover path,
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i]:hover svg,
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i]:hover path {
+  stroke: rgba(20, 21, 30, 1) !important;
+  fill: rgba(20, 21, 30, 1) !important;
+  color: rgba(20, 21, 30, 1) !important;
+}
+body.dsh-glass-on [data-composer-card] button[aria-label="命令"]:hover::before,
+body.dsh-glass-on [data-composer-card] button[aria-label*="Command" i]:hover::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 40%, transparent);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="命令"]::before,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label*="Command" i]::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 34%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.10),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.10),
+    0 1px 3px rgba(0, 0, 0, 0.22);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="命令"] svg,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="命令"] path,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label*="Command" i] svg,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label*="Command" i] path {
+  stroke: rgba(245, 248, 255, 0.96) !important;
+  fill: rgba(245, 248, 255, 0.96) !important;
+  color: rgba(245, 248, 255, 0.96) !important;
+  opacity: 1 !important;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="命令"]:hover svg,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="命令"]:hover path,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label*="Command" i]:hover svg,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label*="Command" i]:hover path {
+  stroke: rgba(245, 248, 255, 1) !important;
+  fill: rgba(245, 248, 255, 1) !important;
+  color: rgba(245, 248, 255, 1) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="命令"]:hover::before,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label*="Command" i]:hover::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 48%, transparent);
+}
+
+/* --- view tabs (对话 / 轨迹 / session log) --- */
+body.dsh-glass-on header:has([role="tablist"]) {
+  isolation: isolate;
+}
+body.dsh-glass-on header:has([role="tablist"])::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  -webkit-backdrop-filter: blur(calc(var(--glass-frost-blur, 24px) * 1.2)) saturate(calc(1 + var(--glass-refraction, 0.4)));
+  backdrop-filter: blur(calc(var(--glass-frost-blur, 24px) * 1.2)) saturate(calc(1 + var(--glass-refraction, 0.4)));
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 30%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0%, black 30%, transparent 100%);
+}
+body.dsh-glass-on header:has([role="tablist"])::after { display: none; }
+
+body.dsh-glass-on header:has([role="tablist"]) [role="tab"] {
+  position: relative;
+  isolation: isolate;
+  border-radius: 999px;
+  padding: 7px 18px;
+  margin-bottom: 10px;
+  color: var(--dsw-alias-label-secondary);
+}
+body.dsh-glass-on header:has([role="tablist"]) [role="tab"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  -webkit-backdrop-filter: blur(12px) saturate(calc(1 + var(--glass-refraction, 0.4))) url(#dsh-glass-edge-refraction);
+  backdrop-filter: blur(12px) saturate(calc(1 + var(--glass-refraction, 0.4))) url(#dsh-glass-edge-refraction);
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 8%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    inset 0 0 10px rgba(255, 255, 255, 0.07),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.12),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.12),
+    0 2px 10px rgba(0, 0, 0, 0.10);
+}
+body[data-ds-dark-theme].dsh-glass-on header:has([role="tablist"]) [role="tab"]::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.08),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.08),
+    0 2px 10px rgba(0, 0, 0, 0.25);
+}
+body.dsh-glass-on header:has([role="tablist"]) [role="tab"][aria-selected="true"] {
+  color: var(--dsw-alias-state-business-primary);
+}
+body.dsh-glass-on header:has([role="tablist"]) [role="tab"][aria-selected="true"]::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 16%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.50),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.26),
+    inset 0 0 14px rgba(255, 255, 255, 0.12),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.18),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.18),
+    0 2px 12px rgba(0, 0, 0, 0.14);
+}
+body[data-ds-dark-theme].dsh-glass-on header:has([role="tablist"]) [role="tab"][aria-selected="true"]::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 20%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    inset 0 0 14px rgba(255, 255, 255, 0.07),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.10),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.10),
+    0 2px 12px rgba(0, 0, 0, 0.30);
+}
+body.dsh-glass-on header:has([role="tablist"]) [role="tab"]::after { display: none; }
+
+/* --- conversation header floats above messages --- */
+body.dsh-glass-on div:has(> [data-conversation-scroll])[data-phase="active"] {
+  position: relative;
+  isolation: isolate;
+}
+body.dsh-glass-on div:has(> [data-conversation-scroll])[data-phase="active"]
+  > [data-slot="conversation.session.header"] > header:has([role="tablist"]) {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 5;
+  background: transparent;
+}
+body.dsh-glass-on div:has(> [data-conversation-scroll])[data-phase="active"]
+  > [data-conversation-scroll] {
+  box-sizing: border-box;
+  padding-top: 88px;
+}
+
+/* --- new session button (sidebar) --- */
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button:not([aria-label*="访问模式" i]):not([aria-label*="Access mode" i]) {
+  position: relative;
+  isolation: isolate;
+}
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button:not([aria-label*="访问模式" i]):not([aria-label*="Access mode" i])::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(12px) url(#dsh-glass-edge-refraction);
+  backdrop-filter: blur(12px) url(#dsh-glass-edge-refraction);
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 8%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    inset 0 0 8px rgba(255, 255, 255, 0.05),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.10),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.10);
+}
+body[data-ds-dark-theme].dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button:not([aria-label*="访问模式" i]):not([aria-label*="Access mode" i])::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.07),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.07);
+}
+
+/* sandbox access-mode button: keep un-frosted (its dropdown is fixed) */
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button[aria-label*="访问模式" i],
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button[aria-label*="Access mode" i] {
+  position: static !important;
+  isolation: auto !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button[aria-label*="访问模式" i]::before,
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button[aria-label*="Access mode" i]::before {
+  display: none !important;
+}
+
+/* sidebar logo: no glass effect */
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  svg[aria-hidden="true"] {
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+body.dsh-glass-on
+  [class*="_root"]:has([class*="_treeBody"])
+  button:has(svg[aria-hidden="true"])::before {
+  display: none !important;
+}
+
+/* --- message bubbles --- */
+[data-time-hover-root] [class*="_bubble"] {
+  position: relative;
+  isolation: isolate;
+}
+body.dsh-glass-on [data-time-hover-root] [class*="_bubble"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  -webkit-backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 8%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+    inset 0 0 12px rgba(255, 255, 255, 0.06),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.10),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.10);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-time-hover-root] [class*="_bubble"]::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 2px 2px 6px 2px rgba(255, 255, 255, 0.07),
+    inset -2px -2px 4px -1px rgba(255, 255, 255, 0.07);
+}
+
+/* --- queue dock --- */
+body.dsh-glass-on [data-queue-dock] > div {
+  -webkit-backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  backdrop-filter:
+    blur(var(--glass-frost-blur, 24px))
+    saturate(calc(1 + var(--glass-refraction, 0.4)))
+    url(#dsh-glass-edge-refraction);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    inset 0 0 12px rgba(255, 255, 255, 0.05);
+}
+
+/* --- settings dialog --- */
+body.dsh-glass-on [role="dialog"][aria-labelledby] {
+  isolation: isolate;
+}
+body.dsh-glass-on [role="dialog"][aria-labelledby]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  -webkit-backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4)));
+  backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4)));
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    inset 0 0 18px rgba(255, 255, 255, 0.08),
+    0 0 24px rgba(255, 255, 255, 0.10);
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby]::before {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 0 18px rgba(255, 255, 255, 0.06),
+    0 0 28px rgba(255, 255, 255, 0.08);
+}
+
+/* --- model / effort selector (full-screen menu) --- */
+body.dsh-glass-on [data-composer-card] [role="menu"]:has(.scrollable) {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 1000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+}
+body.dsh-glass-on [data-composer-card] [role="menu"]:has(.scrollable)::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(0, 0, 0, 0.28);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"]:has(.scrollable)::before {
+  background: rgba(0, 0, 0, 0.52);
+}
+
+body.dsh-glass-on [data-composer-card] [role="menu"] .scrollable {
+  max-width: 600px !important;
+  max-height: min(80vh, 680px) !important;
+  width: 92vw !important;
+  margin: 0 auto !important;
+  border-radius: 16px !important;
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 76%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.17),
+    0 24px 60px rgba(0, 0, 0, 0.32);
+  overflow-y: auto !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] .scrollable {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 82%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    0 24px 60px rgba(0, 0, 0, 0.50);
+}
+
+body.dsh-glass-on [data-composer-card] [role="menu"] > :first-child:not(.scrollable) {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 80%, transparent) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  border-radius: 16px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.17),
+    0 24px 60px rgba(0, 0, 0, 0.32);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] > :first-child:not(.scrollable) {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 84%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    0 24px 60px rgba(0, 0, 0, 0.50);
+}
+
+body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitem"] {
+  background: transparent !important;
+  border-radius: 8px !important;
+  margin: 2px 6px !important;
+  padding: 10px 12px !important;
+  transition: background 0.15s !important;
+}
+body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitem"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 18%, transparent) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitem"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 24%, transparent) !important;
+}
+
+body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitemradio"] {
+  border-radius: 8px !important;
+  margin: 1px 6px !important;
+  padding: 8px 12px !important;
+  transition: background 0.15s !important;
+  background: transparent !important;
+}
+body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitemradio"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 16%, transparent) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitemradio"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 22%, transparent) !important;
+}
+body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitemradio"][aria-checked="true"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 46%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.30) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitemradio"][aria-checked="true"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 34%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16) !important;
+}
+
+body.dsh-glass-on [data-composer-card] [role="menu"] .scrollable [role="group"] {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 2px !important;
+  padding: 0 10px 6px !important;
+}
+body.dsh-glass-on [data-composer-card] [role="menu"] .scrollable [role="group"] > div:first-child {
+  grid-column: 1 / -1 !important;
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 30%, transparent) !important;
+  border-radius: 8px !important;
+  margin: 2px 4px 4px !important;
+  padding: 9px 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  color: var(--dsw-alias-label-secondary, rgba(45, 45, 58, 0.90)) !important;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.25);
+  font-size: 12px !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] .scrollable [role="group"] > div:first-child {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 24%, transparent) !important;
+  color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.90)) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+body.dsh-glass-on [data-composer-card] [role="menu"] { cursor: pointer; }
+body.dsh-glass-on [data-composer-card] [role="menu"] .scrollable { cursor: default; }
+
+/* access-mode dropdown (small, not full-screen) */
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 72%, transparent) !important;
+  -webkit-backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4))) url(#dsh-glass-edge-refraction);
+  backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4))) url(#dsh-glass-edge-refraction);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    inset 0 0 18px rgba(255, 255, 255, 0.07),
+    0 8px 32px rgba(0, 0, 0, 0.28);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 76%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 0 18px rgba(255, 255, 255, 0.05),
+    0 8px 32px rgba(0, 0, 0, 0.46);
+}
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) [role="presentation"],
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) [class*="_viewport"],
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) [class*="_itemWrap"],
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) [class*="_item"],
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) button[role="menuitem"] {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) button[role="menuitem"]:hover,
+body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) button[role="menuitemradio"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 18%, transparent) !important;
+}
+
+/* --- general hover: lift + glow --- */
+body.dsh-glass-on button:not(:disabled):hover,
+body.dsh-glass-on a:not(:disabled):hover,
+body.dsh-glass-on [role="button"]:not(:disabled):hover,
+body.dsh-glass-on [role="tab"]:not(:disabled):hover,
+body.dsh-glass-on [role="menuitem"]:not(:disabled):hover,
+body.dsh-glass-on [role="link"]:not(:disabled):hover {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 4px 12px rgba(0, 0, 0, 0.09);
+  transform: translateY(-1px);
+  filter: brightness(1.12);
+}
+body[data-ds-dark-theme].dsh-glass-on button:not(:disabled):hover,
+body[data-ds-dark-theme].dsh-glass-on a:not(:disabled):hover,
+body[data-ds-dark-theme].dsh-glass-on [role="button"]:not(:disabled):hover,
+body[data-ds-dark-theme].dsh-glass-on [role="tab"]:not(:disabled):hover,
+body[data-ds-dark-theme].dsh-glass-on [role="menuitem"]:not(:disabled):hover,
+body[data-ds-dark-theme].dsh-glass-on [role="link"]:not(:disabled):hover {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 4px 12px rgba(0, 0, 0, 0.16);
+  filter: brightness(1.18);
+}
+
+/* --- tool call text readability --- */
+body.dsh-glass-on [data-variant] [data-disclosure-row] [class*="title"] {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.07);
+}
+body.dsh-glass-on [data-variant] [data-disclosure-row] [class*="summary"] {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* ==========================================================================
+   ANIMATIONS
+   ========================================================================== */
+@keyframes dsh-glass-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+body.dsh-glass-anim-soft #root > *,
+body.dsh-glass-anim-strong #root > * {
+  animation: dsh-glass-fade 0.45s cubic-bezier(0.2, 0.6, 0.3, 1) both;
+}
+
+body.dsh-glass-anim-soft button,
+body.dsh-glass-anim-soft [role="button"],
+body.dsh-glass-anim-strong button,
+body.dsh-glass-anim-strong [role="button"] {
+  transition: transform 0.18s ease, background-color 0.18s ease,
+    opacity 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+body.dsh-glass-anim-soft #dsh-glass-bg,
+body.dsh-glass-anim-soft #dsh-glass-bg img,
+body.dsh-glass-anim-soft #dsh-glass-bg video,
+body.dsh-glass-anim-strong #dsh-glass-bg,
+body.dsh-glass-anim-strong #dsh-glass-bg img,
+body.dsh-glass-anim-strong #dsh-glass-bg video {
+  transition-duration: 0.9s;
+}
+
+@keyframes dsh-glass-pop {
+  0% { transform: translateY(2px) scale(0.985); opacity: 0.6; }
+  100% { transform: none; opacity: 1; }
+}
+body.dsh-glass-anim-strong #root > * {
+  animation: dsh-glass-pop 0.5s cubic-bezier(0.2, 0.6, 0.3, 1) both;
+}
+body.dsh-glass-anim-strong button:hover,
+body.dsh-glass-anim-strong [role="button"]:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 4px 18px rgba(99, 140, 255, 0.20);
+}
+body.dsh-glass-anim-strong #dsh-glass-bg,
+body.dsh-glass-anim-strong #dsh-glass-bg img,
+body.dsh-glass-anim-strong #dsh-glass-bg video {
+  transition-duration: 1.4s;
+}
+
+body.dsh-glass-anim-none #root > * { animation: none !important; }
+body.dsh-glass-anim-none #dsh-glass-bg,
+body.dsh-glass-anim-none #dsh-glass-bg img,
+body.dsh-glass-anim-none #dsh-glass-bg video { transition: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  body.dsh-glass-anim-soft #root > *,
+  body.dsh-glass-anim-strong #root > * { animation: none; }
+  body.dsh-glass-anim-soft #dsh-glass-bg,
+  body.dsh-glass-anim-soft #dsh-glass-bg img,
+  body.dsh-glass-anim-soft #dsh-glass-bg video,
+  body.dsh-glass-anim-strong #dsh-glass-bg,
+  body.dsh-glass-anim-strong #dsh-glass-bg img,
+  body.dsh-glass-anim-strong #dsh-glass-bg video { transition: none; }
+}
+
+/* ==========================================================================
+   UTILITY: toggle frosted-glass rules off when disabled
+   ========================================================================== */
+body:not(.dsh-glass-frosted-on) [data-composer-card]::before,
+body:not(.dsh-glass-frosted-on) [data-frost]::before,
+body:not(.dsh-glass-frosted-on) header:has([role="tablist"])::before,
+body:not(.dsh-glass-frosted-on) header:has([role="tablist"]) [role="tab"]::before,
+body:not(.dsh-glass-frosted-on) [class*="_root"]:has([class*="_treeBody"]) button::before,
+body:not(.dsh-glass-frosted-on) [data-time-hover-root] [class*="_bubble"]::before,
+body:not(.dsh-glass-frosted-on) [data-queue-dock] > div,
+body:not(.dsh-glass-frosted-on) [role="dialog"][aria-labelledby]::before,
+body:not(.dsh-glass-frosted-on) [data-composer-card] button[class*="_primary"],
+body:not(.dsh-glass-frosted-on) [data-composer-card] button[aria-label="命令"]::before,
+body:not(.dsh-glass-frosted-on) [data-composer-card] [role="menu"]:has(.scrollable)::before,
+body:not(.dsh-glass-frosted-on) [data-composer-card] [role="menu"] .scrollable,
+body:not(.dsh-glass-frosted-on) [data-composer-card] [role="menu"] > :first-child:not(.scrollable),
+body:not(.dsh-glass-frosted-on) [data-composer-card] [role="menu"]:not(:has(.scrollable)),
+body:not(.dsh-glass-frosted-on) [data-composer-card] [role="menu"] button[role="menuitem"],
+body:not(.dsh-glass-frosted-on) [data-composer-card] [role="menu"] button[role="menuitemradio"] {
+  /* rules are suppressed by body.dsh-glass-frosted-on guard above;
+     this block is kept as a no-op anchor — actual suppression is via the
+     body class selector (see engine.ts: body.classList.toggle('dsh-glass-frosted-on', config.frosted)) */
+}
+
+/* ==========================================================================
+   TEXT CONTRAST — keep placeholder / stats / labels readable over glass.
+   The input is a contenteditable region in DSH; its placeholder is a real
+   text node, so we target both ::placeholder and [contenteditable] text.
+   ========================================================================== */
+body.dsh-glass-on [data-composer-card] {
+  color: var(--dsw-alias-label-primary, #1c1d26);
+}
+
+/* placeholder (input/textarea + contenteditable + slot) */
+body.dsh-glass-on [data-composer-card] ::placeholder,
+body.dsh-glass-on [data-composer-card] input::placeholder,
+body.dsh-glass-on [data-composer-card] textarea::placeholder,
+body.dsh-glass-on [data-composer-card] [contenteditable] [data-placeholder],
+body.dsh-glass-on [data-composer-card] [contenteditable]:empty:before,
+body.dsh-glass-on [data-composer-card] [data-placeholder],
+body.dsh-glass-on [data-composer-card] [class*="_placeholder"] {
+  color: rgba(15, 16, 26, 0.92) !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: rgba(15, 16, 26, 0.92) !important;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.35), 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] ::placeholder,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] input::placeholder,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] textarea::placeholder,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [contenteditable] [data-placeholder],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [contenteditable]:empty:before,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [data-placeholder],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [class*="_placeholder"] {
+  color: rgba(240, 244, 255, 0.95) !important;
+  -webkit-text-fill-color: rgba(240, 244, 255, 0.95) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65), 0 0 10px rgba(0, 0, 0, 0.35);
+}
+
+/* actual typed text in the composer */
+body.dsh-glass-on [data-composer-card] [contenteditable] {
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  -webkit-text-fill-color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.06);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [contenteditable] {
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.98)) !important;
+  -webkit-text-fill-color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.98)) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* composer dock stats / meta line (tokens, steps, timing, cache) */
+body.dsh-glass-on [data-composer-card] [data-slot="composer.dock"],
+body.dsh-glass-on [data-composer-card] [class*="_stats"],
+body.dsh-glass-on [data-composer-card] [class*="_meta"],
+body.dsh-glass-on [data-composer-card] [class*="_dock"] {
+  color: var(--dsw-alias-label-secondary, rgba(40, 40, 54, 0.95)) !important;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.30), 0 2px 5px rgba(0, 0, 0, 0.22);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [data-slot="composer.dock"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [class*="_stats"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [class*="_meta"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [class*="_dock"] {
+  color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.95)) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+/* model / access-mode / effort selectors (incl. "High" effort label) */
+body.dsh-glass-on [data-composer-card] button,
+body.dsh-glass-on [data-composer-card] [role="combobox"],
+body.dsh-glass-on [data-composer-card] [role="button"],
+body.dsh-glass-on [data-composer-card] [class*="_preset"],
+body.dsh-glass-on [data-composer-card] [class*="_effort"],
+body.dsh-glass-on [data-composer-card] [data-effort] {
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  opacity: 1 !important;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.30), 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="combobox"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="button"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [class*="_preset"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [class*="_effort"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [data-effort] {
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.98)) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+/* sidebar session list + conversation text */
+body.dsh-glass-on [class*="_treeBody"] {
+  color: var(--dsw-alias-label-primary, #1c1d26);
+}
+body[data-ds-dark-theme].dsh-glass-on [class*="_treeBody"] {
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97));
+}
+
+/* message bubbles: authored text stays crisp */
+body.dsh-glass-on [data-time-hover-root] [class*="_bubble"] {
+  color: var(--dsw-alias-label-primary, #1c1d26);
+}
+body[data-ds-dark-theme].dsh-glass-on [data-time-hover-root] [class*="_bubble"] {
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97));
+}
+
+/* general legibility shadow over glass */
+body.dsh-glass-on button,
+body.dsh-glass-on [role="button"],
+body.dsh-glass-on [role="tab"],
+body.dsh-glass-on [role="menuitem"],
+body.dsh-glass-on [role="menuitemradio"],
+body.dsh-glass-on input,
+body.dsh-glass-on textarea,
+body.dsh-glass-on select {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.18), 0 1px 3px rgba(0, 0, 0, 0.10);
+}
+body[data-ds-dark-theme].dsh-glass-on button,
+body[data-ds-dark-theme].dsh-glass-on [role="button"],
+body[data-ds-dark-theme].dsh-glass-on [role="tab"],
+body[data-ds-dark-theme].dsh-glass-on [role="menuitem"],
+body[data-ds-dark-theme].dsh-glass-on [role="menuitemradio"],
+body[data-ds-dark-theme].dsh-glass-on input,
+body[data-ds-dark-theme].dsh-glass-on textarea,
+body[data-ds-dark-theme].dsh-glass-on select {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+/* ==========================================================================
+   COMPOSER BUTTONS — clean thin glass, no carved shadows.
+   ========================================================================== */
+body.dsh-glass-on [data-composer-card] button {
+  position: relative;
+  isolation: isolate;
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 22%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  backdrop-filter: blur(14px) url(#dsh-glass-edge-refraction);
+  -webkit-backdrop-filter: blur(14px) url(#dsh-glass-edge-refraction);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08) !important;
+}
+body.dsh-glass-on [data-composer-card] button svg,
+body.dsh-glass-on [data-composer-card] button path,
+body.dsh-glass-on [data-composer-card] button span {
+  stroke: rgba(20, 21, 30, 0.90) !important;
+  fill: rgba(20, 21, 30, 0.90) !important;
+  color: rgba(20, 21, 30, 0.90) !important;
+}
+body.dsh-glass-on [data-composer-card] button:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 34%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.36) !important;
+}
+body.dsh-glass-on [data-composer-card] button:active {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 40%, transparent) !important;
+}
+
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 26%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button svg,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button path,
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button span {
+  stroke: rgba(245, 248, 255, 0.94) !important;
+  fill: rgba(245, 248, 255, 0.94) !important;
+  color: rgba(245, 248, 255, 0.94) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 38%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button:active {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 44%, transparent) !important;
+}
+
+/* send button — solid teal accent */
+body.dsh-glass-on [data-composer-card] button[aria-label="发送"],
+body.dsh-glass-on [data-composer-card] button[class*="send"],
+body.dsh-glass-on [data-composer-card] button[class*="Submit"] {
+  background: rgba(79, 184, 184, 0.85) !important;
+  border-color: rgba(79, 184, 184, 0.92) !important;
+  color: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 2px 8px rgba(79, 184, 184, 0.28) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[aria-label="发送"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[class*="send"],
+body[data-ds-dark-theme].dsh-glass-on [data-composer-card] button[class*="Submit"] {
+  background: rgba(100, 155, 255, 0.85) !important;
+  border-color: rgba(100, 155, 255, 0.92) !important;
+}
+
+/* ==========================================================================
+   SETTINGS PANEL — glass the top action buttons (导出诊断信息 / 打开DSH终端 /
+   重启 / 打开配置文件). These render through the `settings.action` SLOT into
+   the shell's `.actions` container (a `class="header"` div, NOT an HTML
+   `<header>`), so target [data-slot="settings.action"].
+   ========================================================================== */
+body.dsh-glass-on [role="dialog"][aria-labelledby] [data-slot="settings.action"] {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+
+/* action buttons → glass pill */
+body.dsh-glass-on [role="dialog"][aria-labelledby] [data-slot="settings.action"] button {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 26%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  border-radius: 8px !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  padding: 6px 12px !important;
+  margin: 0 !important;
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
+  white-space: nowrap !important;
+}
+body.dsh-glass-on [role="dialog"][aria-labelledby] [data-slot="settings.action"] button:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 40%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.36) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] [data-slot="settings.action"] button {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 30%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.20) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] [data-slot="settings.action"] button:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 44%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+/* the shell close (X) button sits beside the actions in the same header row */
+body.dsh-glass-on [role="dialog"][aria-labelledby] [class*="_header"] button[class*="_close"],
+body.dsh-glass-on [role="dialog"][aria-labelledby] button[aria-label*="close" i],
+body.dsh-glass-on [role="dialog"][aria-labelledby] [data-slot="settings.close"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 26%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  border-radius: 8px !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] button[aria-label*="close" i] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 30%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+}
+
+/* settings tabs (插件配置 / 插件列表 / 插件市场) → glass */
+body.dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] {
+  display: flex !important;
+  gap: 6px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14) !important;
+}
+body.dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] [role="tab"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 16%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-bottom: none !important;
+  border-radius: 8px 8px 0 0 !important;
+  color: var(--dsw-alias-label-secondary, rgba(45, 45, 58, 0.9)) !important;
+  padding: 8px 16px !important;
+  margin: 0 !important;
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  transition: background 0.15s, color 0.15s !important;
+  white-space: nowrap !important;
+}
+body.dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] [role="tab"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 28%, transparent) !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+}
+body.dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] [role="tab"][aria-selected="true"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 40%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.30) !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  font-weight: 600 !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] [role="tab"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 18%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.85)) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] [role="tab"]:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 28%, transparent) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] [role="tablist"] [role="tab"][aria-selected="true"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 38%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+}
+
+/* ==========================================================================
+   SETTINGS NAVIGATION (left rail) — one uniform pill/ellipse glass card per
+   item so every entry (incl. "桌面设置" / "侧边卡片") looks alike.
+   Target = [role="dialog"] nav button (confirmed from dsh-better-sidebar's
+   settings-nav-icon, which queries exactly this selector).
+   ========================================================================== */
+body.dsh-glass-on [role="dialog"][aria-labelledby] nav button {
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 14%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: var(--dsw-alias-label-secondary, rgba(45, 45, 58, 0.90)) !important;
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 1px 3px rgba(0, 0, 0, 0.06) !important;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
+}
+body.dsh-glass-on [role="dialog"][aria-labelledby] nav button:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 24%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+}
+/* selected / active entry (DSH may set aria-current or a state class) */
+body.dsh-glass-on [role="dialog"][aria-labelledby] nav button[aria-current],
+body.dsh-glass-on [role="dialog"][aria-labelledby] nav button[data-active="true"],
+body.dsh-glass-on [role="dialog"][aria-labelledby] nav button[data-state="active"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 36%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.30) !important;
+  color: var(--dsw-alias-label-primary, #1c1d26) !important;
+  font-weight: 600 !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] nav button {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 16%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  color: var(--dsw-alias-label-secondary, rgba(255, 255, 255, 0.90)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 1px 3px rgba(0, 0, 0, 0.16) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] nav button:hover {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 26%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+}
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] nav button[aria-current],
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] nav button[data-active="true"],
+body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby] nav button[data-state="active"] {
+  background: color-mix(in srgb, var(--glass-tint, #ffffff) 34%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.20) !important;
+  color: var(--dsw-alias-label-primary, rgba(255, 255, 255, 0.97)) !important;
+}
+
+/* dsh-better-sidebar replaces the native settings-nav <svg> with a ::before +
+   SVG-mask icon, which renders unreliably inside DSH's navCell flex row.
+   The bulletproof fix: RESTORE the native <svg> (the exact same rendering
+   path as every other settings entry like "桌面设置") and drop the ::before,
+   so "侧边卡片" aligns identically to the rest. */
+body.dsh-glass-on [data-dsh-better-sidebar-settings-nav] > svg:first-child {
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+body.dsh-glass-on [data-dsh-better-sidebar-settings-nav]::before {
+  display: none !important;
+}
