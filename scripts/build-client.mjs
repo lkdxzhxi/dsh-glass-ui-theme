@@ -22,7 +22,7 @@ import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_DIR = join(ROOT, 'client')
-const ID = 'dsh-glass-ui'
+const ID = 'dsh-glass-ui-theme'
 
 // 0) fresh output dir — tsdown does not clean files it did not emit
 rmSync(OUT_DIR, { recursive: true, force: true })

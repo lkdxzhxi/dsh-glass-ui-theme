@@ -63,11 +63,11 @@ export interface GlassConfig {
     bgBlur: number;
 }
 export declare const DEFAULT_CONFIG: GlassConfig;
-export declare const name = "dsh-glass-ui";
+export declare const name = "dsh-glass-ui-theme";
 export declare function apply(ctx: HostContext): void;
 /**
  * The pre-activation CSS: root glass variables plus the fixed background
- * layer. Kept minimal — the client half takes over as soon as it activates
+ * layer. Kept minimal 鈥?the client half takes over as soon as it activates
  * and re-applies the same values from the live config.
  */
 export declare function bootstrapCss(config: GlassConfig): string;

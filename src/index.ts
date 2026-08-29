@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-glass-ui host half.
  *
  * Persists the glass theme configuration and uploaded media (background
@@ -8,11 +8,11 @@
  * glass look before the client plugin activates (no flash).
  *
  * Routes (all under the webServer service):
- *   GET    /glass-ui/config          → saved config JSON
- *   PUT    /glass-ui/config          → save config JSON
- *   POST   /glass-ui/media           → raw-body upload (x-media-kind header)
- *   GET    /glass-ui/media/<file>    → static media file
- *   DELETE /glass-ui/media/<file>    → delete media file
+ *   GET    /glass-ui/config          鈫?saved config JSON
+ *   PUT    /glass-ui/config          鈫?save config JSON
+ *   POST   /glass-ui/media           鈫?raw-body upload (x-media-kind header)
+ *   GET    /glass-ui/media/<file>    鈫?static media file
+ *   DELETE /glass-ui/media/<file>    鈫?delete media file
  */
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -173,7 +173,7 @@ function referencedMedia(config: GlassConfig): Set<string> {
   const refs = new Set<string>()
   for (const u of [config.fontUrl, config.bgImage, config.bgVideo, ...config.bgImages]) {
     if (typeof u !== 'string' || u === '') continue
-    // capture the file name directly — never derive it with length arithmetic
+    // capture the file name directly 鈥?never derive it with length arithmetic
     const m = /\/(glass-ui\/media\/)([a-zA-Z0-9._-]+)$/.exec(u)
     if (m === null) continue
     const name = m[2]!
@@ -183,7 +183,7 @@ function referencedMedia(config: GlassConfig): Set<string> {
 }
 
 /**
- * Only sweep orphans older than this — a fresh upload referenced by the
+ * Only sweep orphans older than this 鈥?a fresh upload referenced by the
  * config another tab just saved must survive a stale writer's save, and an
  * in-flight upload must not be deleted mid-stream.
  */
@@ -316,7 +316,7 @@ function sendText(res: ServerResponse, status: number, text: string): void {
 // plugin
 // ---------------------------------------------------------------------------
 
-export const name = 'dsh-glass-ui'
+export const name = 'dsh-glass-ui-theme'
 
 export function apply(ctx: HostContext): void {
   ctx.inject(['webServer'], (host) => {
@@ -473,7 +473,7 @@ export function apply(ctx: HostContext): void {
           'content-length': String(size),
         })
         if (req.method === 'GET') {
-          // stream — a 1 GB wallpaper must never be buffered whole in memory
+          // stream 鈥?a 1 GB wallpaper must never be buffered whole in memory
           const stream = createReadStream(file)
           stream.on('error', () => res.destroy())
           stream.pipe(res)
@@ -512,7 +512,7 @@ function contentTypeToExt(contentType: string | undefined, kind: string): string
 
 /**
  * The pre-activation CSS: root glass variables plus the fixed background
- * layer. Kept minimal — the client half takes over as soon as it activates
+ * layer. Kept minimal 鈥?the client half takes over as soon as it activates
  * and re-applies the same values from the live config.
  */
 export function bootstrapCss(config: GlassConfig): string {
@@ -551,3 +551,4 @@ function cssString(value: string): string {
   if (value === '') return "''"
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 }
+
