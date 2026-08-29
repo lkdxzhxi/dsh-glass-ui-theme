@@ -22,7 +22,7 @@
 dsh plugin --profile desktop add github:lkdxzhxi/dsh-glass-ui-theme
 
 # 或从 npm（发布后）
-dsh plugin --profile desktop add dsh-glass-ui
+dsh plugin --profile desktop add dsh-glass-ui-theme
 ```
 
 安装后打开 **设置 → 自定义UI设计** 即可开始。

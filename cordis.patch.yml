@@ -2,5 +2,5 @@
 # `id` is the stable row identity in the composed config tree; `name` is the
 # npm package name the loader resolves. Later layers override by id.
 - insert:
-    - id: dsh-glass-ui
-      name: dsh-glass-ui
+    - id: dsh-glass-ui-theme
+      name: dsh-glass-ui-theme
