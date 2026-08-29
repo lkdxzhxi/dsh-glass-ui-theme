@@ -1,6 +1,6 @@
 # dsh-glass-ui
 
-> 为 DeepSeek Harness Web 打造的液态玻璃主题 — 磨砂质感、可调色调、动态壁纸，让 DSH 界面焕然一新。
+> 为 DeepSeek Harness 打造的液态玻璃主题 — 磨砂质感、可调色调、动态壁纸，让 DSH 界面焕然一新。
 
 ![预览](docs/screenshot.png)
 
@@ -59,7 +59,3 @@ pnpm typecheck      # 类型检查
 ```
 
 本地开发时，将插件 link 到 DSH 任意 profile（desktop / web）并开启 `patchReload: "live"`。
-
-## License
-
-MIT
