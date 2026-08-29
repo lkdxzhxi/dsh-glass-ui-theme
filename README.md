@@ -19,7 +19,7 @@
 
 ```sh
 # 从 GitHub（推荐）
-dsh plugin --profile desktop add github:lkdxzhxi/dsh-glass-ui
+dsh plugin --profile desktop add github:lkdxzhxi/dsh-glass-ui-theme
 
 # 或从 npm（发布后）
 dsh plugin --profile desktop add dsh-glass-ui
