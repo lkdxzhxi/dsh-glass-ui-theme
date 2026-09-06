@@ -598,6 +598,11 @@ body[data-ds-dark-theme].dsh-glass-on [role="dialog"][aria-labelledby]::before {
     0 0 28px rgba(255, 255, 255, 0.08);
 }
 
+/* fix for DSH 2.0.5: settings panel has overflow:hidden which clips ::before */
+body.dsh-glass-on [role="dialog"][aria-labelledby] {
+  overflow: visible !important;
+}
+
 /* --- model / effort selector (full-screen menu) --- */
 body.dsh-glass-on [data-composer-card] [role="menu"]:has(.scrollable) {
   position: fixed !important;
