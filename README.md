@@ -1,6 +1,6 @@
 # dsh-glass-ui-theme
 
-> 为 DeepSeek Harness 打造的液态玻璃主题 — 磨砂质感、可调色调、动态壁纸，让 DSH 界面焕然一新。
+> 为 DeepSeek Harness 打造的液态玻璃主题 — 磨砂质感、可调色调、动态壁纸，视频背景，让 DSH 界面焕然一新。
 
 ![预览](docs/screenshot.png)
 
