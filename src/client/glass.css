@@ -580,6 +580,7 @@ body.dsh-glass-on [role="dialog"][aria-labelledby]::before {
   inset: 0;
   border-radius: inherit;
   z-index: -1;
+  pointer-events: none;
   -webkit-backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4)));
   backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4)));
   background: color-mix(in srgb, var(--glass-tint, #ffffff) 10%, transparent);
@@ -658,8 +659,13 @@ body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] .scroll
     0 24px 60px rgba(0, 0, 0, 0.50);
 }
 
+/* Inner card of the FULL-SCREEN menu. The `:not(.scrollable)` guard is a
+   no-op in practice (the real class is a hashed `*_scrollable`), so this rule
+   also hit every small dropdown and painted an 80% white sheet over it —
+   that is what made the access-mode popup look white in the dark theme.
+   No surface here: the popup keeps whatever background it already has. */
 body.dsh-glass-on [data-composer-card] [role="menu"] > :first-child:not(.scrollable) {
-  background: color-mix(in srgb, var(--glass-tint, #ffffff) 80%, transparent) !important;
+  background: transparent !important;
   -webkit-backdrop-filter: blur(28px) saturate(160%);
   backdrop-filter: blur(28px) saturate(160%);
   border-radius: 16px !important;
@@ -669,18 +675,22 @@ body.dsh-glass-on [data-composer-card] [role="menu"] > :first-child:not(.scrolla
     0 24px 60px rgba(0, 0, 0, 0.32);
 }
 body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] > :first-child:not(.scrollable) {
-  background: color-mix(in srgb, var(--glass-tint, #ffffff) 84%, transparent) !important;
+  background: transparent !important;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.24),
     inset 0 0 0 1px rgba(255, 255, 255, 0.10),
     0 24px 60px rgba(0, 0, 0, 0.50);
 }
 
+/* Menu cells: match DSH's native `Menu.module.css` cell exactly
+   (min-height 40, padding 8px 10px, NO margin). The theme used to add
+   margin + extra padding, which pushed the popup past the anchored
+   max-height clamp and made DSH grow a scrollbar on a 3-row menu. */
 body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitem"] {
   background: transparent !important;
   border-radius: 8px !important;
-  margin: 2px 6px !important;
-  padding: 10px 12px !important;
+  margin: 0 !important;
+  padding: 8px 10px !important;
   transition: background 0.15s !important;
 }
 body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitem"]:hover {
@@ -692,8 +702,8 @@ body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] button[
 
 body.dsh-glass-on [data-composer-card] [role="menu"] button[role="menuitemradio"] {
   border-radius: 8px !important;
-  margin: 1px 6px !important;
-  padding: 8px 12px !important;
+  margin: 0 !important;
+  padding: 8px 10px !important;
   transition: background 0.15s !important;
   background: transparent !important;
 }
@@ -743,9 +753,9 @@ body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"] .scroll
 body.dsh-glass-on [data-composer-card] [role="menu"] { cursor: pointer; }
 body.dsh-glass-on [data-composer-card] [role="menu"] .scrollable { cursor: default; }
 
-/* access-mode dropdown (small, not full-screen) */
+/* access-mode dropdown (small, not full-screen).
+   No surface of its own: the popup keeps DSH's native menu background. */
 body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) {
-  background: color-mix(in srgb, var(--glass-tint, #ffffff) 72%, transparent) !important;
   -webkit-backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4))) url(#dsh-glass-edge-refraction);
   backdrop-filter: blur(var(--glass-frost-blur, 24px)) saturate(calc(1 + var(--glass-refraction, 0.4))) url(#dsh-glass-edge-refraction);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -756,7 +766,6 @@ body.dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) {
     0 8px 32px rgba(0, 0, 0, 0.28);
 }
 body[data-ds-dark-theme].dsh-glass-on [data-composer-card] [role="menu"]:not(:has(.scrollable)) {
-  background: color-mix(in srgb, var(--glass-tint, #ffffff) 76%, transparent) !important;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.24),
     inset 0 0 0 1px rgba(255, 255, 255, 0.10),
