@@ -1,6 +1,6 @@
 {
   "name": "dsh-glass-ui-theme",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "为 DeepSeek Harness 打造的液态玻璃 UI 主题：磨砂玻璃+边缘折射、可调透明度/模糊/色调、自定义字体、背景图与动态壁纸（多图轮播）、自定义 CSS、柔和动画。",
   "type": "module",
   "main": "lib/index.js",
